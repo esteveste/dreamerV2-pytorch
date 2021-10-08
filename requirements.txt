@@ -1,0 +1,7 @@
+matplotlib
+ruamel.yaml
+elements
+gym[atari]
+
+### dev requirements
+# rich
