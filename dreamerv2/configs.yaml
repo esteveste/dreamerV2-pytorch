@@ -18,6 +18,7 @@ defaults:
   precision: 16
   jit: True
   device: 'cuda'
+  load: 'all'
 
   # Agent
   log_every: 1e4
@@ -35,8 +36,8 @@ defaults:
   pred_discount: True
   grad_heads: [image, reward, discount]
   rssm: {hidden: 400, deter: 400, stoch: 32, discrete: 32, act: elu, std_act: sigmoid2, min_std: 0.1}
-  encoder: {depth: 48, act: elu, kernels: [4, 4, 4, 4], keys: [image]}
-  decoder: {depth: 48, act: elu, kernels: [5, 5, 6, 6]}
+  encoder: {depth: 48, act: elu, kernels: [4, 4, 4, 4], layers: 1, units: 50, keys: [image]}
+  decoder: {depth: 48, act: elu, kernels: [5, 5, 6, 6], layers: 1, units: 100, keys: [image]}
   reward_head: {layers: 4, units: 400, act: elu, dist: mse}
   discount_head: {layers: 4, units: 400, act: elu, dist: binary}
   loss_scales: {kl: 1.0, reward: 1.0, discount: 1.0}
@@ -94,6 +95,66 @@ atari:
   loss_scales.kl: 0.1
   loss_scales.discount: 5.0
 #  .*\.wd$: 1e-6
+
+
+minigrid:
+
+  task: MiniGrid-DoorKey-6x6-v0
+  time_limit: 2000  # 30 minutes of game play.
+  action_repeat: 4
+  steps: 2e8 #3e6 #2e8
+  eval_every: 1e5
+  log_every: 1e4 #1e5
+  prefill: 200000
+  grayscale: False
+  train_every: 10
+  clip_rewards: tanh
+  rssm:  {hidden: 200, deter: 200, stoch: 8, discrete: 8}
+
+  encoder.keys: [ flatten ]
+  decoder.keys: [ flatten ]
+
+  reward_head: { layers: 1, units: 100, act: elu, dist: mse }
+  discount_head: { layers: 1, units: 100, act: elu, dist: binary }
+
+  actor: { layers: 1, units: 100, act: elu, dist: onehot, min_std: 0.1 }
+  critic: { layers: 1, units: 100, act: elu, dist: mse }
+  model_opt.lr: 2e-4
+  actor_opt.lr: 4e-5
+  critic_opt.lr: 1e-4
+  actor_ent: 3e-3
+  discount: 0.99
+  actor_grad: reinforce
+  actor_grad_mix: 0
+  loss_scales.kl: 1.0
+  loss_scales.discount: 5.0
+
+  dataset: {batch: 25, length: 50, oversample_ends: True}
+  image_size: [7,7]
+
+retro:
+
+  task: atari_pong
+  time_limit: 108000  # 30 minutes of game play.
+  action_repeat: 4
+  steps: 2e8 #3e6 #2e8
+  eval_every: 1e5
+  log_every: 1e4 #1e5
+  prefill: 200000
+  grayscale: False
+  train_every: 16
+  clip_rewards: tanh
+  rssm:  {hidden: 600, deter: 600, stoch: 32, discrete: 32}
+  actor.dist: onehot
+  model_opt.lr: 2e-4
+  actor_opt.lr: 4e-5
+  critic_opt.lr: 1e-4
+  actor_ent: 1e-3
+  discount: 0.999
+  actor_grad: reinforce
+  actor_grad_mix: 0
+  loss_scales.kl: 0.1
+  loss_scales.discount: 5.0
 
 dmc:
 

@@ -13,10 +13,15 @@ import torch.optim as optim
 import common
 import elements.logger
 
-import wandb
-
+try:
+    import wandb
+except Exception:
+    wandb = None #dont force wandb dependence
 
 class Module(nn.Module):
+
+    def __init__(self):
+        nn.Module.__init__(self)
 
     # get function from original Dreamer
     # in the end this should be a traced function, where ifs are ignored
@@ -42,6 +47,25 @@ class Module(nn.Module):
                 self._modules[name] = self._modules[name].to(memory_format=torch.channels_last) #FIXME testing
 
         return self._modules[name]
+
+
+    # for reptile based on https://github.com/gabrielhuang/reptile-pytorch
+    def point_grad_to(self, target):
+        '''
+        Set .grad attribute of each parameter to be proportional
+        to the difference between self and target
+        '''
+        for p, target_p in zip(self.parameters(), target.parameters()):
+            if p.grad is None:
+                if self.is_cuda():
+                    p.grad = torch.autograd.Variable(torch.zeros(p.size())).cuda()
+                else:
+                    p.grad = torch.autograd.Variable(torch.zeros(p.size()))
+            p.grad.data.zero_()  # not sure this is required
+            p.grad.data.add_(p.data - target_p.data)
+
+    def is_cuda(self):
+        return next(self.parameters()).is_cuda
 
 
 class EmptyOptimizer():
@@ -103,7 +127,6 @@ class Optimizer():
 
         return metrics
 
-
 class TensorBoardOutputPytorch:
 
     ## FIXME image dataformats='CHW' by default
@@ -156,9 +179,8 @@ class WandBOutput:
     ## FIXME image dataformats='CHW' by default
 
     def __init__(self, fps=20,**kwargs):
-        # from torch.utils.tensorboard import SummaryWriter
-        #
-        # self._writer = SummaryWriter(str(logdir), max_queue=1000)
+        assert wandb, 'make sure you have wandb installed'
+
         self._fps = fps
         wandb.init(**kwargs)
 

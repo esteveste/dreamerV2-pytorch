@@ -103,7 +103,10 @@ def sample_episodes(episodes, length=None, balance=False, seed=0):
             dtype = torch.float16 if common.ENABLE_FP16 else torch.float32
             episode = {k: torch.as_tensor(v[index: index + length], dtype=dtype) for k, v in episode.items()}
             # its T, H,W,C to T,C,H,W
-            episode['image'] = episode['image'].permute(0, 3, 1, 2)
+
+            if len(episode['image'].shape) == 4:
+                episode['image'] = episode['image'].permute(0, 3, 1, 2)
+
         yield episode
 
 

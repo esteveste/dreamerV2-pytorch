@@ -8,6 +8,8 @@ import warnings
 import resource
 import subprocess
 
+import gym
+
 try:
     import rich.traceback
 
@@ -27,8 +29,6 @@ import numpy as np
 import ruamel.yaml as yaml
 import torch
 import random
-
-torch.set_num_threads(1)
 
 import agent
 import elements
@@ -54,9 +54,14 @@ message = 'No GPU found. To actually train on CPU remove this assert.'
 assert torch.cuda.is_available(), message  # FIXME
 
 assert config.precision in (16, 32), config.precision
+assert config.load in ('all', 'wm'), config.precision
 assert config.device in ('cuda', 'cpu'), config.precision
 
 device = config.device
+
+if device != 'cpu':
+    torch.set_num_threads(1)
+
 
 # reproducibility
 seed = 271
@@ -67,11 +72,21 @@ np.random.seed(seed)
 random.seed(seed)
 torch.backends.cudnn.deterministic = True  # no apparent impact on speed
 
-torch.backends.cudnn.benchmark = True  # faster, increases memory though..
+torch.backends.cudnn.benchmark = True  # faster, increases memory though.., no impact on seed
+
+# ## seed
+# import cv2
+#
+# cv2.setRNGSeed(seed)
+# torch.use_deterministic_algorithms(True) #no difference in performance, or speed
+
 
 print('Logdir', logdir)
 train_replay = common.Replay(logdir / 'train_replay', config.replay_size)
 eval_replay = common.Replay(logdir / 'eval_replay', config.time_limit or 1)
+
+
+
 step = elements.Counter(train_replay.total_steps)
 outputs = [
     elements.TerminalOutput(),
@@ -93,11 +108,6 @@ with open(logdir / 'used_config.yaml', 'w') as f:
     f.write('## command line input:\n## ' + ' '.join(sys.argv) + '\n##########\n\n')
     yaml.dump(config, f)
 
-with open(logdir / 'git_diff.txt', 'w') as f:
-    out = subprocess.check_output("git diff", shell=True)
-    diff = out.decode()
-    f.write(diff)
-
 
 def make_env(mode):
     suite, task = config.task.split('_', 1)
@@ -107,10 +117,24 @@ def make_env(mode):
     elif suite == 'atari':
         env = common.Atari(
             task, config.action_repeat, config.image_size, config.grayscale,
-            life_done=False, sticky_actions=True, all_actions=True)
+            life_done=False, sticky_actions=True, all_actions=True, seed=seed)
         env = common.OneHotAction(env)
+    elif suite == 'retro':
+        env = common.Retro(task, config.action_repeat, config.image_size, config.grayscale,
+                           life_done=False, sticky_actions=True, all_actions=True, seed=seed)
+        env = common.OneHotAction(env)
+
+    elif suite == 'minigrid':
+        env = common.Minigrid(task, config.image_size, config.grayscale, seed=seed)
+        env = common.OneHotAction(env)
+
     else:
         raise NotImplementedError(suite)
+
+    if tuple(config.encoder['keys']) == ('flatten',):
+        assert tuple(config.decoder['keys']) == ('flatten',), "config: decoder is not flatten"
+        env = common.FlattenImageObs(env)
+
     env = common.TimeLimit(env, config.time_limit)
     env = common.RewardObs(env)
     env = common.ResetObs(env)
@@ -131,6 +155,10 @@ def per_episode(ep, mode):
     should = {'train': should_video_train, 'eval': should_video_eval}[mode]
     if should(step):
         video_log = ep['image']
+        if len(ep['image'].shape) == 2: #(flatten)
+            shape = (1 if config.grayscale else 3,) + config.image_size #big mess, since logger receiver other format
+            video_log = video_log.reshape(-1,*shape).transpose(0,2,3,1)
+
         logger.video(f'{mode}_policy', video_log)  # B,H,W,C
     logger.write()
 
@@ -164,9 +192,25 @@ if config.precision == 16:
     common.ENABLE_FP16 = True  # enable fp16 here since only cuda can use fp16
     print("setting fp16")
 
-if (logdir / 'variables.pt').exists():
-    print("Load agent")
-    agnt.load_state_dict(torch.load(logdir / 'variables.pt'))
+
+if config.load =='all':
+    if (logdir / 'variables.pt').exists():
+        print("Load agent")
+        agnt.load_state_dict(torch.load(logdir / 'variables.pt'))
+
+elif config.load=='wm':
+    if (logdir / 'variables.pt').exists():
+        print("Load ONLY WORLD MODEL AGENT")
+        # agnt.load_state_dict(torch.load(logdir / 'variables.pt'))
+
+        agnt_state_dict = torch.load(logdir / 'variables.pt', map_location='cpu')
+
+        get_wm_state_dict_keys = lambda m: list(filter(lambda x:'wm' in x,m.keys()))
+        get_wm_state_dict = lambda m:{k[3:]:v for k,v in m.items() if k in get_wm_state_dict_keys(m)}
+
+        agnt.wm.load_state_dict(get_wm_state_dict(agnt_state_dict))
+#
+
 
 agnt = agnt.to(device)
 
@@ -183,7 +227,7 @@ def next_batch(iter):
     return out
 
 
-agnt.train(next_batch(train_dataset)) # do initial benchmarking pass
+agnt.train(next_batch(train_dataset))  # do initial benchmarking pass
 torch.cuda.empty_cache()  # clear cudnn bechmarking cache
 
 if not (logdir / 'variables.pt').exists():  # new agent

@@ -24,7 +24,6 @@ class RSSM(common.Module):
 
         self._cell = torch.jit.script(GRUCell(self._hidden, self._deter, norm=True))
 
-
     def initial(self, batch_size, device):
         '''
         Returns initial RSSM state
@@ -163,18 +162,21 @@ class RSSM(common.Module):
 
 class ConvEncoder(common.Module):
     def __init__(
-            self, depth=32, act=F.elu, kernels=(4, 4, 4, 4), keys=['image']):
+            self, depth=32, act=F.elu, kernels=(4, 4, 4, 4), keys=['image'], layers=2, units=200):
         super(ConvEncoder, self).__init__()
         self._act = getattr(F, act) if isinstance(act, str) else act
         self._depth = depth
         self._kernels = kernels
         self._keys = keys
 
+        # for flatten
+        self._layers = layers
+        self._units = units
+
     def forward(self, obs):  # obs shape(batch?),W,H,C, can be torch object
         if tuple(self._keys) == ('image',):
             # from B,T,C,H,W or B,C,H,W to (B*T,C,H,W)
-            x = torch.reshape(obs['image'], (-1, *obs['image'].shape[-3:])).to(
-                memory_format=torch.channels_last)  # FIXME testing
+            x = torch.reshape(obs['image'], (-1, *obs['image'].shape[-3:])).to(memory_format=torch.channels_last)  # FIXME testing
             for i, kernel in enumerate(self._kernels):
                 depth = 2 ** i * self._depth
                 x = self._act(self.get(f'h{i}', nn.Conv2d, x.shape[1], depth, kernel, stride=2)(x))
@@ -183,8 +185,18 @@ class ConvEncoder(common.Module):
             # return x.permute(0, 2, 3, 1).reshape(*obs['image'].shape[:-3], -1)
             return x.reshape(*obs['image'].shape[:-3], -1)  # to B,T,W*H*C or B,W*H*C
 
+        if tuple(self._keys) == ('flatten',):
+            x = torch.reshape(obs['image'], (-1, np.prod(obs['image'].shape[-1:])))
+
+            for index in range(self._layers):
+                x = self.get(f'h{index}', nn.Linear, x.shape[-1], self._units)(x)
+                x = self._act(x)
+
+            out= x.reshape(*obs['image'].shape[:-1], -1)
+            return out
+
         else:
-            raise NotImplementedError("ConvEncoder - not 'image' key",self._keys)
+            raise NotImplementedError("ConvEncoder - not 'image' key", self._keys)
             # FIXME DO Later
             # # dtype = prec.global_policy().compute_dtype
             # features = []
@@ -208,31 +220,51 @@ class ConvEncoder(common.Module):
 
 
 class ConvDecoder(common.Module):
-    def __init__(self, shape=(3, 64, 64), depth=32, act=F.elu, kernels=(5, 5, 6, 6)):
+    def __init__(self, shape=(3, 64, 64), depth=32, act=F.elu, kernels=(5, 5, 6, 6), keys=['image'], layers=2,
+                 units=200):
         super(ConvDecoder, self).__init__()
         self._shape = shape
         self._depth = depth
         self._act = getattr(F, act) if isinstance(act, str) else act
         self._kernels = kernels
+        self._keys = keys
+
+        # for flatten
+        self._layers = layers
+        self._units = units
 
     def forward(self, features):
-        ConvT = nn.ConvTranspose2d
-        x = self.get('hin', nn.Linear, features.shape[-1], 32 * self._depth)(features)
-        x = x.reshape(-1, 32 * self._depth, 1, 1).to(
-            memory_format=torch.channels_last)  # FIXME testing  # 32*depth, 1,1
-        for i, kernel in enumerate(self._kernels):
-            depth = 2 ** (len(self._kernels) - i - 2) * self._depth
-            act = self._act
-            if i == len(self._kernels) - 1:  # last one
-                depth = self._shape[0]
-                act = lambda x: x
-            x = self.get(f'h{i}', ConvT, x.shape[1], depth, kernel, stride=2)(x)
-            x = act(x)
-        # this permute is essential for the final shape IS NOT NOW
-        # mean = x.permute(0, 2, 3, 1).reshape(*features.shape[:-1], *self._shape)
+        if tuple(self._keys) == ('image',):
+            ConvT = nn.ConvTranspose2d
+            x = self.get('hin', nn.Linear, features.shape[-1], 32 * self._depth)(features)
+            x = x.reshape(-1, 32 * self._depth, 1, 1).to(memory_format=torch.channels_last)  # FIXME testing  # 32*depth, 1,1
+            for i, kernel in enumerate(self._kernels):
+                depth = 2 ** (len(self._kernels) - i - 2) * self._depth
+                act = self._act
+                if i == len(self._kernels) - 1:  # last one
+                    depth = self._shape[0]
+                    act = lambda x: x
+                x = self.get(f'h{i}', ConvT, x.shape[1], depth, kernel, stride=2)(x)
+                x = act(x)
+            # this permute is essential for the final shape IS NOT NOW
+            # mean = x.permute(0, 2, 3, 1).reshape(*features.shape[:-1], *self._shape)
 
-        mean = x.reshape(*features.shape[:-1], *self._shape)  # back to shape (magic,C,H,W)
-        return common.Independent(common.Normal(mean, 1), len(self._shape))
+            mean = x.reshape(*features.shape[:-1], *self._shape)  # back to shape (magic,C,H,W)
+            return common.Independent(common.Normal(mean, 1), len(self._shape))
+
+        if tuple(self._keys) == ('flatten',):
+            ##flatten prediction
+            x = torch.reshape(features, (-1, *features.shape[-1:]))
+
+            index=-1
+            for index in range(self._layers-1):
+                x = self.get(f'h{index}', nn.Linear, x.shape[-1], self._units)(x)
+                x = self._act(x)
+
+            x = self.get(f'h{index+1}', nn.Linear, x.shape[-1], np.prod(self._shape))(x)
+
+            mean = x.reshape(*features.shape[:-1], *self._shape)  # back to shape (magic,C,H,W)
+            return common.Independent(common.Normal(mean, 1), len(self._shape))
 
 
 class MLP(common.Module):

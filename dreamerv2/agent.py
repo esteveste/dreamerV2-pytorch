@@ -38,7 +38,12 @@ class Agent(common.Module):
         # init modules without optimizers (once in opt)
         with torch.no_grad():
             channels = 1 if config.grayscale else 3
-            self.train({'image': torch.rand(1, 4, channels, *config.image_size),
+            if tuple(config.encoder['keys']) == ('flatten',):
+                image = torch.rand(1, 4, np.prod([channels, *config.image_size]))
+            else:
+                image = torch.rand(1, 4, channels, *config.image_size)
+
+            self.train({'image': image,
                         'action': torch.rand(1, 4, self._num_act),
                         'reward': torch.rand(1, 4),
                         'discount': torch.rand(1, 4),
@@ -134,6 +139,9 @@ class Agent(common.Module):
                                                           **self.config.critic_opt)
 
 
+
+
+
 class WorldModel(common.Module):
     def __init__(self, step, config):
         super(WorldModel, self).__init__()
@@ -141,11 +149,16 @@ class WorldModel(common.Module):
         self.config = config
         self.rssm = common.RSSM(**config.rssm)
         self.heads = {}
-        shape = (1 if config.grayscale else 3,) + config.image_size
+        self.shape = (1 if config.grayscale else 3,) + config.image_size
+
+        out_shape=self.shape
+        if tuple(config.encoder['keys']) == ('flatten',):
+            out_shape = [np.prod(self.shape)]
+
         self.encoder = common.ConvEncoder(**config.encoder)
 
         self.heads = nn.ModuleDict({
-            'image': common.ConvDecoder(shape, **config.decoder),
+            'image': common.ConvDecoder(out_shape, **config.decoder),
             'reward': common.MLP([], **config.reward_head),
         })
         if config.pred_discount:
@@ -264,6 +277,12 @@ class WorldModel(common.Module):
         recon = recon.cpu()
         openl = openl.cpu()
         truth = data['image'][:6].cpu() + 0.5
+
+        if len(recon.shape)==3: #flat
+            recon = recon.reshape(*recon.shape[:-1],*self.shape)
+            openl = openl.reshape(*openl.shape[:-1],*self.shape)
+            truth = truth.reshape(*truth.shape[:-1],*self.shape)
+
 
         model = torch.cat([recon[:, :5] + 0.5, openl + 0.5], 1)  # time
         error = (model - truth + 1) / 2

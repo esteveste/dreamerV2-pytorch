@@ -1,7 +1,9 @@
 matplotlib
 ruamel.yaml
 elements
-gym[atari]
+gym[atari]>=0.21
+opencv-python
+tensorboard
 
 ### dev requirements
 # rich

@@ -7,6 +7,13 @@ import threading
 import gym
 import numpy as np
 
+from functools import reduce
+
+try:
+    import cv2
+except ImportError:
+    cv2 = None
+
 
 ## all environment obs are dicionaries -> image,ram keys
 
@@ -77,7 +84,7 @@ class Atari:
 
     def __init__(
             self, name, action_repeat=4, size=(84, 84), grayscale=True, noops=30,
-            life_done=False, sticky_actions=True, all_actions=False):
+            life_done=False, sticky_actions=True, all_actions=False, seed=None):
         assert size[0] == size[1]
         import gym.wrappers
         import gym.envs.atari
@@ -85,9 +92,10 @@ class Atari:
             name = 'jamesbond'
         with self.LOCK:
             env = gym.envs.atari.AtariEnv(
-                game=name, obs_type='image', frameskip=1,
+                game=name, obs_type='rgb', frameskip=1,
                 repeat_action_probability=0.25 if sticky_actions else 0.0,
                 full_action_space=all_actions)
+        env.seed(seed)
         # Avoid unnecessary rendering in inner env.
         env._get_obs = lambda: None
         # Tell wrapper that the inner env has no action repeat.
@@ -116,7 +124,7 @@ class Atari:
             image = self._env.reset()
         if self._grayscale:
             image = image[..., None]
-        obs = {'image': image, 'ram': self._env.env._get_ram()}
+        obs = {'image': image, 'ram': self._env.unwrapped.ale.getRAM()}
         return obs
 
     def step(self, action):
@@ -124,11 +132,235 @@ class Atari:
         image, reward, done, info = self._env.step(action)
         if self._grayscale:
             image = image[..., None]
-        obs = {'image': image, 'ram': self._env.env._get_ram()}
+        obs = {'image': image, 'ram': self._env.unwrapped.ale.getRAM()}
         return obs, reward, done, info
 
     def render(self, mode):
         return self._env.render(mode)
+
+
+# FIXME finish retro
+# WATCH out for multi envinroment
+class Retro:
+
+    def __init__(self, name, action_repeat=4, size=(84, 84), grayscale=True, noops=30, life_done=False,
+                 sticky_actions=True, all_actions=False, seed=None):
+        assert cv2 is not None, \
+            "opencv-python package not installed!"
+
+        import retro
+        env = retro.make(name, use_restricted_actions=retro.Actions.DISCRETE)
+
+        # noops, action_reapeat, resize, end when life is done, image to grayscale
+        # env = gym.wrappers.AtariPreprocessing(
+        #     env, noops, action_repeat, size[0], life_done, grayscale)
+        env.seed(seed)
+
+        env = NoopResetEnv(env, noop_max=noops)
+        env = MaxAndSkipEnv(env, skip=action_repeat)
+
+        env = WarpFrame(env, width=size[0], height=size[1], grayscale=grayscale)
+
+        self._env = env
+        self._grayscale = grayscale
+
+    @property
+    def observation_space(self):
+        return gym.spaces.Dict({
+            'image': self._env.observation_space,
+            'ram': gym.spaces.Box(0, 255, (128,), np.uint8),
+        })
+
+    @property
+    def action_space(self):
+        return gym.spaces.Dict({'action': self._env.action_space})
+
+    def close(self):
+        self._env.close()
+
+    def reset(self):
+        image = self._env.reset()
+        obs = {'image': image, 'ram': self._env.unwrapped.get_ram()}
+        return obs
+
+    def step(self, action):
+        action = action['action']
+        image, reward, done, info = self._env.step(action)
+        obs = {'image': image, 'ram': self._env.unwrapped.get_ram()}
+        return obs, reward, done, info
+
+    def render(self, mode):
+        return self._env.render(mode)
+
+
+class Minigrid:
+
+    def __init__(self, name, size=(84, 84), grayscale=False, seed=None, mode='compact'):
+        assert cv2 is not None, \
+            "opencv-python package not installed!"
+
+        import gym_minigrid
+        env = gym.make(name)
+
+        env.seed(seed)
+
+        if mode == 'compact' or mode == 'compact_full':
+
+            if mode == 'compact_full':
+                env = gym_minigrid.wrappers.FullyObsWrapper(env)
+
+
+            env = MinigridCompactMultiplier(env)
+
+
+        else:
+            env = gym_minigrid.wrappers.RGBImgPartialObsWrapper(env, tile_size=9)  # for image only 64 is good (9*7=63)
+            env = WarpFrame(env, width=size[0], height=size[1], grayscale=grayscale, dict_space_key='image')
+
+        # noops, action_reapeat, resize, end when life is done, image to grayscale
+        # env = gym.wrappers.AtariPreprocessing(
+        #     env, noops, action_repeat, size[0], life_done, grayscale)
+
+        # env = NoopResetEnv(env, noop_max=noops)
+        # env = MaxAndSkipEnv(env, skip=action_repeat)
+        #
+        # env = WarpFrame(env,width=size[0], height=size[1], grayscale=grayscale)
+        self._env = env
+
+    @property
+    def observation_space(self):
+        return self._env.observation_space
+
+    @property
+    def action_space(self):
+        return gym.spaces.Dict({'action': self._env.action_space})
+
+    def close(self):
+        self._env.close()
+
+    def reset(self):
+        return self._env.reset()
+
+    def step(self, action):
+        action = action['action']
+        obs, reward, done, info = self._env.step(action)
+        return obs, reward, done, info
+
+    def render(self, mode):
+        return self._env.render(mode)
+
+
+# Modified only to Retro
+class NoopResetEnv(gym.Wrapper):
+    def __init__(self, env, noop_max=30):
+        """Sample initial states by taking random number of no-ops on reset.
+        No-op is assumed to be action 0.
+        """
+        gym.Wrapper.__init__(self, env)
+        self.noop_max = noop_max
+        self.override_num_noops = None
+        self.noop_action = 0
+        assert env.unwrapped.get_action_meaning(0) == []
+
+    def reset(self, **kwargs):
+        """ Do no-op action for a number of steps in [1, noop_max]."""
+        self.env.reset(**kwargs)
+        if self.override_num_noops is not None:
+            noops = self.override_num_noops
+        else:
+            noops = self.unwrapped.np_random.randint(1, self.noop_max + 1)  # pylint: disable=E1101
+        assert noops > 0
+        obs = None
+        for _ in range(noops):
+            obs, _, done, _ = self.env.step(self.noop_action)
+            if done:
+                obs = self.env.reset(**kwargs)
+        return obs
+
+    def step(self, ac):
+        return self.env.step(ac)
+
+
+class MaxAndSkipEnv(gym.Wrapper):
+    def __init__(self, env, skip=4):
+        """Return only every `skip`-th frame"""
+        gym.Wrapper.__init__(self, env)
+        # most recent raw observations (for max pooling across time steps)
+        self._obs_buffer = np.zeros((2,) + env.observation_space.shape, dtype=np.uint8)
+        self._skip = skip
+
+    def step(self, action):
+        """Repeat action, sum reward, and max over last observations."""
+        total_reward = 0.0
+        done = None
+        for i in range(self._skip):
+            obs, reward, done, info = self.env.step(action)
+            if i == self._skip - 2: self._obs_buffer[0] = obs
+            if i == self._skip - 1: self._obs_buffer[1] = obs
+            total_reward += reward
+            if done:
+                break
+        # Note that the observation on the done=True frame
+        # doesn't matter
+        max_frame = self._obs_buffer.max(axis=0)
+
+        return max_frame, total_reward, done, info
+
+    def reset(self, **kwargs):
+        return self.env.reset(**kwargs)
+
+
+class WarpFrame(gym.ObservationWrapper):
+    def __init__(self, env, width=84, height=84, grayscale=True, dict_space_key=None):
+        """
+        Warp frames to 84x84 as done in the Nature paper and later work.
+        If the environment uses dictionary observations, `dict_space_key` can be specified which indicates which
+        observation should be warped.
+        """
+        super().__init__(env)
+        self._width = width
+        self._height = height
+        self._grayscale = grayscale
+        self._key = dict_space_key
+        if self._grayscale:
+            num_colors = 1
+        else:
+            num_colors = 3
+
+        new_space = gym.spaces.Box(
+            low=0,
+            high=255,
+            shape=(self._height, self._width, num_colors),
+            dtype=np.uint8,
+        )
+        if self._key is None:
+            original_space = self.observation_space
+            self.observation_space = new_space
+        else:
+            original_space = self.observation_space.spaces[self._key]
+            self.observation_space.spaces[self._key] = new_space
+        assert original_space.dtype == np.uint8 and len(original_space.shape) == 3
+
+    def observation(self, obs):
+        if self._key is None:
+            frame = obs
+        else:
+            frame = obs[self._key]
+
+        if self._grayscale:
+            frame = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
+        frame = cv2.resize(
+            frame, (self._width, self._height), interpolation=cv2.INTER_AREA
+        )
+        if self._grayscale:
+            frame = np.expand_dims(frame, -1)
+
+        if self._key is None:
+            obs = frame
+        else:
+            obs = obs.copy()
+            obs[self._key] = frame
+        return obs
 
 
 class Dummy:
@@ -164,6 +396,7 @@ class TimeLimit:
         self._env = env
         self._duration = duration
         self._step = None
+        self.unwrapped = env.unwrapped if hasattr(env, "unwrapped") else env._env
 
     def __getattr__(self, name):
         return getattr(self._env, name)
@@ -194,6 +427,8 @@ class NormalizeAction:
         self._low = np.where(self._mask, space.low, -1)
         self._high = np.where(self._mask, space.high, 1)
 
+        self.unwrapped = env.unwrapped if hasattr(env, "unwrapped") else env._env
+
     def __getattr__(self, name):
         return getattr(self._env, name)
 
@@ -217,6 +452,8 @@ class OneHotAction:
         self._env = env
         self._key = key
         self._random = np.random.RandomState()
+
+        self.unwrapped = env.unwrapped if hasattr(env, "unwrapped") else env._env
 
     def __getattr__(self, name):
         return getattr(self._env, name)
@@ -254,6 +491,7 @@ class RewardObs:
         assert key not in env.observation_space.spaces
         self._env = env
         self._key = key
+        self.unwrapped = env.unwrapped if hasattr(env, "unwrapped") else env._env
 
     def __getattr__(self, name):
         return getattr(self._env, name)
@@ -281,6 +519,7 @@ class ResetObs:
         assert key not in env.observation_space.spaces
         self._env = env
         self._key = key
+        self.unwrapped = env.unwrapped if hasattr(env, "unwrapped") else env._env
 
     def __getattr__(self, name):
         return getattr(self._env, name)
@@ -300,3 +539,28 @@ class ResetObs:
         obs = self._env.reset()
         obs['reset'] = np.array(True, np.bool)
         return obs
+
+
+class MinigridCompactMultiplier(gym.core.ObservationWrapper):
+    def __init__(self, env):
+        super().__init__(env)
+
+    def observation(self, obs):
+        obs['image'] = obs['image'] * 25
+        return obs
+
+
+#
+class FlattenImageObs(gym.core.ObservationWrapper):
+    """
+    Use the image as the only observation output, no language/mission.
+    """
+
+    def __init__(self, env):
+        super().__init__(env)
+        self.observation_space = gym.spaces.Dict({
+            'image': gym.spaces.flatten_space(env.observation_space),
+        })
+
+    def observation(self, obs):
+        return {'image': obs['image'].transpose(2, 0, 1).flatten()}

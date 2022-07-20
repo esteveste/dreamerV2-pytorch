@@ -46,7 +46,10 @@ class Driver:
                    self._obs[0]}  # convert before sending
             # obs['image'] = obs['image'].to(torch.channels_last) # FIXME CANT
             # print("obs",obs['image'].shape) # envs, H,W,C
-            obs['image'] = obs['image'].permute(0, 3, 1, 2)
+
+            if len(obs['image'].shape) == 4:
+                # flag for no pytorch channel swapping if flat..
+                obs['image'] = obs['image'].permute(0, 3, 1, 2)
 
             dtype = torch.float16 if common.ENABLE_FP16 else torch.float32  # only on cuda
             obs = {k: v.to(device=self._device, dtype=dtype) for k, v in obs.items()}
