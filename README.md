@@ -68,3 +68,7 @@ Comparison of the Space Invaders Atari game learning performance over our implem
 vs the original implementation (Tensorflow), while using the same hyperparameters. 
 
 Results averaged over 5 randomly-seeded runs.
+
+#### Pre-trained models
+
+link: https://drive.google.com/drive/folders/1md-5Q5Ewh0a9EwCUb8LcQNSPE6IO8iPb?usp=sharing
