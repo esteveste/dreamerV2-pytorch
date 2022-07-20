@@ -1,15 +1,27 @@
 original_dreamerv2/
-
+rnl_data/
+rnl_data
 tests/
+testing/
+exp_management/
 
+retro_data/
+old/
 notebooks/
 
-dreamerv2/play.py
-dreamerv2/play_test.py
-dreamerv2/train_wm.ipynb
-dreamerv2/create_datasets.py
+scripts/converted_logdir
+scripts/converted_rnl
+scripts/converted_test4
+scripts/converted_test_transfer
+
+plots
+algo
 
 .idea
+
+TODO
+
+wandb
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
@@ -151,3 +163,23 @@ dmypy.json
 cython_debug/
 
 .pytest_cache
+scripts/converted_test4/
+
+scripts/converted_test_transfer/
+/repos/
+
+scripts/converted_logdir
+
+scripts/converted_rnl/
+
+common/not_used.py
+
+experiments.zip
+
+testing_contrastive.sh
+
+testing_stuff_atari.sh
+
+experiments/
+
+scripts/
