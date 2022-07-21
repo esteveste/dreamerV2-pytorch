@@ -12,8 +12,7 @@ This repo intends to approximate as close as possible the results obtained by th
 ### Install dependencies:
 
 ```sh
-#install pytorch using conda or pip -> https://pytorch.org
-conda install pytorch torchvision torchaudio cudatoolkit=11.1 -c pytorch -c nvidia
+#install pytorch using conda or pip -> follow the instructions here https://pytorch.org
 
 #install other dependencies
 pip3 install -r requirements.txt
