@@ -14,6 +14,11 @@ This repo intends to approximate as close as possible the results obtained by th
 ```sh
 #install pytorch using conda or pip -> follow the instructions here https://pytorch.org
 
+# install ffmpeg for saving agents gifs
+# code for Ubuntu/debian
+sudo apt install ffmpeg
+
+
 #install other dependencies
 pip3 install -r requirements.txt
 ```
