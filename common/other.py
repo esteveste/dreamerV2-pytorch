@@ -39,6 +39,7 @@ def sequence_scan(fn, state, *inputs, reverse=False):
 
     # tf.nest.flatten is really good here
     # what a mess
+    ## fun fact now jax pytree features would really be usefull here
 
     indices = range(inputs[0].shape[0])
     select_index = lambda inputs, i: [input[i] for input in inputs]
